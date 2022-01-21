@@ -1,6 +1,4 @@
-# projet_blockchain
-
-M2 ISD - Session 3 - Projet de BlockChain
+# M2 ISD - Projet de BlockChain
 
 ## Groupes de 4
 
