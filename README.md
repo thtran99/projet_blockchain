@@ -1,6 +1,6 @@
 # M2 ISD - Projet de BlockChain
 
-## Groupes de 4
+## Groupe de 4
 
 - NGUYEN To Dung
 - WANE Yeya
