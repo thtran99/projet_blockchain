@@ -64,4 +64,3 @@ def wallet():
 
 # %%
 wallet()
-
