@@ -1,13 +1,15 @@
 #!/usr/bin/env python
 # coding: utf-8
-# %%
+
 import socket, threading, sys
 miners = []
 nick_name = ""
 
 
-# %%
 def handle_messages(miner_name, miner):
+    """
+    Handle the messages sent by the miners.
+    """
     global miners
     while True:
         try:
@@ -32,8 +34,10 @@ def handle_messages(miner_name, miner):
             break
 
 
-# %%
 def connect_miner(miner_name):
+    """
+    Connect to a miner
+    """
     global nick_name
     
     try:
@@ -54,7 +58,6 @@ def connect_miner(miner_name):
         return
 
 
-# %%
 def wallet():
     global nick_name
     nick_name = sys.argv[1]
@@ -62,5 +65,5 @@ def wallet():
     connect_miner(miner_name)
 
 
-# %%
 wallet()
+
