@@ -5,6 +5,7 @@ import socket, threading, sys, time
 import hashlib
 import json
 from collections import OrderedDict
+import json
 
 miners = {}
 wallets = {}
@@ -22,7 +23,7 @@ class BlockChain(object):
         self.chain = []
         self.current_transactions = []
         # create the genesis block
-        self.new_block(previous_hash=1, nonce=100)
+        self.new_block(previous_hash='00', nonce=0)
 
     @staticmethod
     def hash(block):
@@ -86,7 +87,7 @@ class BlockChain(object):
         guess_hash = hashlib.sha256(guess).hexdigest()
         return guess_hash[:difficulty] == '0'*difficulty
 
-
+    # debug the valid chain and the resolve or delete this cond
     def valid_chain(self, chain):
         """
         check if a bockchain is valid
@@ -107,9 +108,9 @@ class BlockChain(object):
             #Delete the reward transaction
             transactions = block['transactions'][:-1]
             # Need to make sure that the dictionary is ordered. Otherwise we'll get a different hash
-            transaction_elements = ['sender', 'recipient', 'value']
-            transactions = [OrderedDict((k, transaction[k]) for k in transaction_elements) for transaction in transactions]
-
+            #transaction_elements = ['sender', 'recipient', 'value']
+            #transactions = [OrderedDict((k, transaction[k]) for k in transaction_elements) for transaction in transactions]
+            #print(transactions)
             if not self.valid_proof(transactions, block['previous_hash'], block['nonce'], MINING_DIFFICULTY):
                 return False
 
@@ -123,6 +124,8 @@ class BlockChain(object):
         Resolve conflicts between blockchain's nodes
         by replacing our chain with the longest one in the network.
         """
+        global response
+        response = ""
         new_chain = None
 
         # We're only looking for chains longer than ours
@@ -130,13 +133,12 @@ class BlockChain(object):
 
         # Grab and verify the chains from all the nodes in our network
         for node in miners:
-            node.send("CHAIN")
-            #time.sleep(0.2)
-
+            miners[node].send(("/CHAIN").encode())
+           
             while not response:
                 pass
 
-            print("response of request CHAIN : ", response)
+            #print("chain of other miner ", response)
             length = len(response)
             chain = response
 
@@ -146,7 +148,6 @@ class BlockChain(object):
                 new_chain = chain
             
             response = ""
-
         # Replace our chain if we discovered a new, valid chain longer than ours
         if new_chain:
             self.chain = new_chain
@@ -172,7 +173,7 @@ def mine():
     previous_hash = blockchain.hash(last_block)
     block = blockchain.new_block(proof, previous_hash)
 
-    response = {
+    resp = {
     'message': "Forged new block.",
     'index': block['index'],
     'transactions': block['transactions'],
@@ -180,10 +181,11 @@ def mine():
     'previous_hash': block['previous_hash'],
     }
 
-    print(response)
+    print(resp)
 
-    # Send the new blockchain to others miners
+    # MAJ of the blockchain with the blockchain of others miners
     replaced = blockchain.resolve_conflicts()
+
     if replaced:
         print('Our chain was replaced')
     else:
@@ -215,11 +217,27 @@ def send_list_miner():
 def handle_wallet_connection(nick_name, conn):
     while True:
         try:
-            msg = conn.recv(1024)
+            msg = conn.recv(1024).decode()
             if msg:
                 print(nick_name, ":", msg)
+                # send wallet message to others miners
                 for m in miners.keys():
-                    miners[m].send(msg)
+                    miners[m].send(("/MSG WALLET-" + nick_name + " " + msg).encode())
+                # treat message for current miner
+                # New transaction: /TRANS Dung Yeya 10
+                msg_split = msg.split()
+                if msg_split[0] == "/TRANS":
+                    #print("Adding new transaction...")
+                    index = blockchain.new_transaction(
+                    sender = msg_split[1],
+                    recipient = msg_split[2],
+                    amount = msg_split[3]
+                    )
+
+                # check if a transaction t is in a block b: CHECK-t-b
+                if msg_split[0] == "/CHECK":
+                    #apply merkle here ?
+                    pass
                     
             else:
                 raise Exception("wallet " + nick_name + " is closed")
@@ -232,21 +250,53 @@ def handle_wallet_connection(nick_name, conn):
 
 # %%
 def handle_miner_connection(nick_name, miner_nb):
+    global response
+    response = ""
     while True:
         try:
             msg = miner_nb.recv(1024).decode()
             if msg:
-                print(nick_name, ":", msg)
-                msg_split = msg.split("-")
-                
-                # It's a require to connect with new miner
-                if msg_split[0] == "MINER":
+                # /MSG WALLET-wallet_name /TRANS A B or /CONNECT MINER-miner_name
+                msg_split = msg.split()
+                #print("miner thread got: ", msg)
+                # message from a miner to connect with new miner
+                if msg_split[0] == "/CONNECT":
+                    msg_split = msg_split[1].split("-")
+                    print("split = ", msg_split)
                     connect_to_neighbor(msg_split[1])
 
-                                # check if a transaction t is in a block b: CHECK-t-b
-                if msg_split[0] == "CHECK":
-                    #apply merkle here ?
-                    pass
+                #We have a reponse
+                if msg_split[0] == "REP":
+                    response = json.loads("".join(msg_split[1:]))
+                    #print("response updated")
+                    
+
+                # Return the chain of the current miner: CHAIN
+                if msg_split[0] == "/CHAIN":
+                    response = blockchain.chain
+                    miner_nb.send(("REP "+ json.dumps(response)).encode())
+                
+                # message from a wallet
+                if msg_split[0] == "/MSG":
+                    wallet_name = msg_split[1].split("-")[1]
+                    msg_split = msg_split[2:]
+                    print(wallet_name, ":", " ".join(msg_split))
+                    
+                    # New transaction: /TRANS Dung Yeya 10
+                    if msg_split[0] == "/TRANS":
+                        #print("Adding new transaction...")
+                        index = blockchain.new_transaction(
+                        sender = msg_split[1],
+                        recipient = msg_split[2],
+                        amount = msg_split[3]
+                        )
+
+                    # check if a transaction t is in a block b: /CHECK t b
+                    #change the structure of a transaction into a merkle tree 
+                    # only that ?
+                    if msg_split[0] == "/CHECK":
+                        #apply merkle here ?
+                        pass
             
                
             ## miner closed
@@ -268,7 +318,7 @@ def connect_to_neighbor(m):
             miner_nb.connect(('localhost', int(m)))
             miners[m] = miner_nb
 
-            miner_nb.send(("MINER-" + miner_name).encode())
+            miner_nb.send(("/CONNECT MINER-" + miner_name).encode())
             print('Connected to', m)
 
             threading.Thread(target=handle_miner_connection, args=[m, miner_nb]).start()
@@ -283,7 +333,13 @@ def connect_to_neighbor(m):
 
 
 def handle_miner_ops():
-    global response, miner_name
+    # remove this and move it to handle_miiner
+    # the client should be the one able to mine ?
+    # but the trans should be transmitted to every miner
+    # if two servers are mining and then receive the new blockchain, how to stop the mining ?
+    # or we don't have to ?
+
+    global miner_name
     while True:
         try:
             msg = input()
@@ -292,7 +348,6 @@ def handle_miner_ops():
                 # Return the chain of the current miner: CHAIN
                 if msg_split[0] == "/CHAIN":
                     print(blockchain.chain)
-                    response = blockchain.chain
 
                 # Return the current transactions: /BLOCK
                 if msg_split[0] == "/BLOCK":
@@ -302,23 +357,22 @@ def handle_miner_ops():
                 if msg_split[0] == "/MINE":
                     mine()
 
-                # New transaction: /TRANS Dung Yeya 10
-                if msg_split[0] == "/TRANS":
-                    print("Adding new transaction", msg)
-                    index = blockchain.new_transaction(
-                    sender = msg_split[1],
-                    recipient = msg_split[2],
-                    amount = msg_split[3]
-                    )
+                # Resolve conflicts
+                if msg_split[0] == "/RESOLVE":
+                    replaced = blockchain.resolve_conflicts()
+                    if replaced:
+                        print('Our chain was replaced')
+                    else:
+                        print('Our chain is authoritative')
+
             ## miner closed
-            #else:
-            #    raise Exception("Miner " + nick_name + " is closed")
+            else:
+                raise Exception("Miner " + nick_name + " is closed")
             
         except Exception as e:
             print('Error to handle miner connection:', e)
             remove_connection(miner_name)
             break
-
 
 
 def miner():
@@ -342,24 +396,25 @@ def miner():
             conn, addr = miner.accept()
             
             msg = conn.recv(1024).decode()
-            msg_split = msg.split("-")
+            msg_split = msg.split(" ")
             
-            print("im here ", msg)
+            #print("main thread got: ", msg)
             ## new connect is a MINER
-            if msg_split[0] == 'MINER':
+            if msg_split[0] == '/CONNECT':
+                msg_split = msg_split[1].split("-")
                 nick_name = msg_split[1]
                 
                 if nick_name not in miners.keys():
                     # demand new miner connect with neighbors
                     for name in miners.keys():
-                        conn.send(("MINER-" + name).encode())
+                        conn.send(("/CONNECT MINER-" + name).encode())
                         # avoid receive multi mess in same time (ex of error: MINER-8000MINER-8001)
                         time.sleep(1) 
                 
                     miners[nick_name] = conn
                     threading.Thread(target=handle_miner_connection, args=[nick_name, conn]).start()
                     print("Miner", nick_name, "is connected")
-                    print("List:", miners.keys())
+                    #print("List:", miners.keys())
                     
                     # send list miner to wallet
                     send_list_miner()
@@ -371,7 +426,7 @@ def miner():
                 if nick_name not in wallets.keys():
                     wallets[nick_name] = conn
                     threading.Thread(target=handle_wallet_connection, args=[nick_name, conn]).start()
-                    print('Welcome', nick_name, 'to miner', miner_name)
+                    print('Welcome', nick_name, 'to MINER-' + miner_name)
                     
                     #send_list_miner()
                     conn.send(" ".join(list(miners.keys())).encode())
@@ -384,4 +439,3 @@ def miner():
 
 # %%
 miner()
-
