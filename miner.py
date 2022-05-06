@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 # coding: utf-8
-# %%
+
 import socket, threading, sys, time
 import hashlib
 import json
-from collections import OrderedDict
 import json
 
+# Global variables
 miners = {}
 wallets = {}
 miner_name = ""
@@ -14,7 +14,6 @@ response = ""
 blockchain = ""
 MINING_REWARD = 1
 MINING_DIFFICULTY = 2
-
 
 
 class BlockChain(object):
@@ -64,7 +63,6 @@ class BlockChain(object):
         print("Transaction will be added to the Block ", next_block_idx)
         return next_block_idx
 
-
     def proof_of_work(self):
         """
         Proof of work algorithm
@@ -78,7 +76,6 @@ class BlockChain(object):
 
         return nonce
 
-
     def valid_proof(self, transactions, last_hash, nonce, difficulty=MINING_DIFFICULTY):
         """
         Check if a hash value satisfies the mining conditions. This function is used within the proof_of_work function.
@@ -87,7 +84,6 @@ class BlockChain(object):
         guess_hash = hashlib.sha256(guess).hexdigest()
         return guess_hash[:difficulty] == '0'*difficulty
 
-    # debug the valid chain and the resolve or delete this cond
     def valid_chain(self, chain):
         """
         check if a bockchain is valid
@@ -97,26 +93,18 @@ class BlockChain(object):
 
         while current_index < len(chain):
             block = chain[current_index]
-            #print(last_block)
-            #print(block)
-            #print("\n-----------\n")
             # Check that the hash of the block is correct
             if block['previous_hash'] != self.hash(last_block):
                 return False
 
             # Check that the Proof of Work is correct
-            #Delete the reward transaction
+            # Delete the reward transaction
             transactions = block['transactions'][:-1]
-            # Need to make sure that the dictionary is ordered. Otherwise we'll get a different hash
-            #transaction_elements = ['sender', 'recipient', 'value']
-            #transactions = [OrderedDict((k, transaction[k]) for k in transaction_elements) for transaction in transactions]
-            #print(transactions)
             if not self.valid_proof(transactions, block['previous_hash'], block['nonce'], MINING_DIFFICULTY):
                 return False
 
             last_block = block
             current_index += 1
-
         return True
 
     def resolve_conflicts(self):
@@ -155,50 +143,66 @@ class BlockChain(object):
 
         return False
 
-
-def mine():
-    global miner_name, blockchain
-    # first we need to run the proof of work algorithm to calculate the new proof..
-    last_block = blockchain.last_block
-    proof = blockchain.proof_of_work()
-
-    # we must recieve reward for finding the proof in form of receiving 1 Coin
-    blockchain.new_transaction(
-    sender=0,
-    recipient=miner_name,
-    amount=1,
-    )
-
-    # forge the new block by adding it to the chain
-    previous_hash = blockchain.hash(last_block)
-    block = blockchain.new_block(proof, previous_hash)
-
-    resp = {
-    'message': "Forged new block.",
-    'index': block['index'],
-    'transactions': block['transactions'],
-    'proof': block['nonce'],
-    'previous_hash': block['previous_hash'],
-    }
-
-    print(resp)
-
-    # MAJ of the blockchain with the blockchain of others miners
+###############################################################################################
+def resolve_conflicts():
+    """
+    Update the current chain
+    """
     replaced = blockchain.resolve_conflicts()
 
     if replaced:
         print('Our chain was replaced')
+        # reset the current list of transactions
+        blockchain.current_transactions = []
+        return True
     else:
         print('Our chain is authoritative')
+        return False
 
 
-# %%
+def mine():
+    """
+    Add a new block to the chain
+    """
+    global miner_name, blockchain
+    print("Checking if the blockchain is up to date..")
+    if resolve_conflicts():
+        print("Nothing to mine")
+    else:
+        # first we need to run the proof of work algorithm to calculate the new proof..
+        last_block = blockchain.last_block
+        proof = blockchain.proof_of_work()
+
+        # we must recieve reward for finding the proof in form of receiving 1 Coin
+        blockchain.new_transaction(
+        sender=0,
+        recipient=miner_name,
+        amount=1,
+        )
+
+        # forge the new block by adding it to the chain
+        previous_hash = blockchain.hash(last_block)
+        block = blockchain.new_block(proof, previous_hash)
+
+        resp = {
+        'message': "Forged new block.",
+        'index': block['index'],
+        'transactions': block['transactions'],
+        'proof': block['nonce'],
+        'previous_hash': block['previous_hash'],
+        }
+        print(resp)
+
+
 def remove_connection(nick_name):
+    """
+    Remove the connection of a miner or a wallet
+    """
     if nick_name in miners.keys():
         miners[nick_name].close()
         miners.pop(nick_name)
         print("Miner", nick_name, "is removed")
-        print("List:", miners.keys())
+        print("List of miners:", list(miners.keys()))
         send_list_miner()
         
     if nick_name in wallets.keys():
@@ -207,14 +211,44 @@ def remove_connection(nick_name):
         print("wallet", nick_name, "is removed")
 
 
-# %%
 def send_list_miner():
+    """
+    Send the list of miners to the wallets
+    """
     for w in wallets.keys():
         wallets[w].send(" ".join(list(miners.keys())).encode())
 
 
-# %%
+def connect_to_neighbor(m):
+    """
+    Connect the miner m to the others miners
+    """
+    global miner_name
+    if m not in miners.keys():
+        try:
+            miner_nb = socket.socket()
+            miner_nb.connect(('localhost', int(m)))
+            miners[m] = miner_nb
+
+            miner_nb.send(("/CONNECT MINER-" + miner_name).encode())
+            print('Connected to', m)
+
+            threading.Thread(target=handle_miner_connection, args=[m, miner_nb]).start()
+
+        except Exception as e: 
+            print('Error connecting to neighbor:', e)
+            remove_connection(m)
+    else:
+        print(miner_name, "is already connected with", m)
+
+    print("List of miners:", list(miners.keys()))
+
+
+###############################################################################################
 def handle_wallet_connection(nick_name, conn):
+    """
+    Handle the messages sent by the wallets
+    """
     while True:
         try:
             msg = conn.recv(1024).decode()
@@ -248,8 +282,10 @@ def handle_wallet_connection(nick_name, conn):
             break
 
 
-# %%
 def handle_miner_connection(nick_name, miner_nb):
+    """
+    Handle the messages sent by the miners
+    """
     global response
     response = ""
     while True:
@@ -297,8 +333,7 @@ def handle_miner_connection(nick_name, miner_nb):
                     if msg_split[0] == "/CHECK":
                         #apply merkle here ?
                         pass
-            
-               
+                 
             ## miner closed
             else:
                 raise Exception("Miner " + nick_name + " is closed")
@@ -309,36 +344,10 @@ def handle_miner_connection(nick_name, miner_nb):
             break
 
 
-# %%
-def connect_to_neighbor(m):
-    global miner_name
-    if m not in miners.keys():
-        try:
-            miner_nb = socket.socket()
-            miner_nb.connect(('localhost', int(m)))
-            miners[m] = miner_nb
-
-            miner_nb.send(("/CONNECT MINER-" + miner_name).encode())
-            print('Connected to', m)
-
-            threading.Thread(target=handle_miner_connection, args=[m, miner_nb]).start()
-
-        except Exception as e: 
-            print('Error connecting to neighbor:', e)
-            remove_connection(m)
-    else:
-        print(miner_name, "is already connected with", m)
-
-    print("List:", miners.keys())
-
-
 def handle_miner_ops():
-    # remove this and move it to handle_miiner
-    # the client should be the one able to mine ?
-    # but the trans should be transmitted to every miner
-    # if two servers are mining and then receive the new blockchain, how to stop the mining ?
-    # or we don't have to ?
-
+    """
+    Handle the input from the miners
+    """
     global miner_name
     while True:
         try:
@@ -359,15 +368,11 @@ def handle_miner_ops():
 
                 # Resolve conflicts
                 if msg_split[0] == "/RESOLVE":
-                    replaced = blockchain.resolve_conflicts()
-                    if replaced:
-                        print('Our chain was replaced')
-                    else:
-                        print('Our chain is authoritative')
+                    resolve_conflicts()
 
             ## miner closed
             else:
-                raise Exception("Miner " + nick_name + " is closed")
+                raise Exception("Miner " + miner_name + " is closed")
             
         except Exception as e:
             print('Error to handle miner connection:', e)
@@ -375,6 +380,7 @@ def handle_miner_ops():
             break
 
 
+###############################################################################################
 def miner():
     global miner_name
     global blockchain
@@ -398,7 +404,6 @@ def miner():
             msg = conn.recv(1024).decode()
             msg_split = msg.split(" ")
             
-            #print("main thread got: ", msg)
             ## new connect is a MINER
             if msg_split[0] == '/CONNECT':
                 msg_split = msg_split[1].split("-")
@@ -414,7 +419,7 @@ def miner():
                     miners[nick_name] = conn
                     threading.Thread(target=handle_miner_connection, args=[nick_name, conn]).start()
                     print("Miner", nick_name, "is connected")
-                    #print("List:", miners.keys())
+                    print("List of miners:", list(miners.keys()))
                     
                     # send list miner to wallet
                     send_list_miner()
@@ -437,5 +442,4 @@ def miner():
         return
 
 
-# %%
 miner()
